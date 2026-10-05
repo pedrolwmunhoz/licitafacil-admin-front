@@ -1,301 +1,220 @@
-import { useState, useEffect } from "react";
-import { useSearchParams } from "react-router-dom";
+import { FormEvent, useState } from "react";
+import { Navigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { FieldWithExpected } from "@/components/ui/field-with-expected";
-import { Eye, EyeOff, LogIn, ShieldCheck } from "lucide-react";
-import { useToast } from "@/hooks/use-toast";
-import { useValidation } from "@/hooks/useValidation";
-import { maskCpfInput, maskCnpjInput, maskUsernameInput, maskEmailInput, maskDddInput, maskNumeroTelefoneInput } from "@/lib/format";
-import {
-  validateCredencialByTipo,
-  validateSenha,
-  getFieldExpected,
-  validateCodigoPais,
-  validateDdd,
-  validateNumeroTelefone,
-} from "@/lib/validations";
-import type { TipoCredencial } from "@/types/auth";
 
-type PaisDdd = { codigo: string; fone: string; nome: string };
+const DOTS = [
+  0, 0, 0, 0, 1, 2, 1, 2, 0, 0, 0, 1, 0, 1, 2, 2, 0, 0, 1, 0, 1, 1, 2, 2, 0, 1, 0, 0, 1, 0, 1, 2, 0, 0, 0, 1, 0, 0, 1, 2, 0, 0, 1, 0, 0, 0, 1, 1,
+];
 
-function foneSemZerosEsquerda(fone: string): string {
-  return (fone || "").replace(/^0+/, "") || "0";
+function Logo({ size = 36 }: { size?: number }) {
+  const icon = size >= 36 ? 23 : 17;
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+      <span
+        aria-hidden
+        style={{
+          width: size,
+          height: size,
+          flexShrink: 0,
+          borderRadius: 4,
+          background: "#FFCC00",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <svg width={icon} height={icon} viewBox="0 0 24 24" fill="none" stroke="#1D1D1B" strokeWidth="2.6" strokeLinecap="round">
+          <path d="M4 4a16 16 0 0 1 16 16" />
+          <path d="M4 10a10 10 0 0 1 10 10" />
+          <circle cx="5" cy="19" r="1.8" fill="#1D1D1B" stroke="none" />
+        </svg>
+      </span>
+      <span style={{ fontSize: size >= 36 ? 20 : 16, fontWeight: 800, letterSpacing: "-0.015em", color: "#FFFFFF", whiteSpace: "nowrap" }}>
+        Licita<span style={{ color: "#FFCC00" }}>Facil</span>
+      </span>
+      <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.14em", color: "#FFCC00", background: "#374044", padding: "3px 6px", borderRadius: 2 }}>
+        ADMIN
+      </span>
+    </div>
+  );
 }
 
 export default function AdminLoginPage() {
-  const { login, isLoading } = useAuth();
-  const { toast } = useToast();
-  const [searchParams, setSearchParams] = useSearchParams();
-  const [valor, setValor] = useState("");
-  const [tipoCredencial, setTipoCredencial] = useState<TipoCredencial>("EMAIL");
-  const [codigoPais, setCodigoPais] = useState("55");
-  const [ddd, setDdd] = useState("");
-  const [telefoneNumero, setTelefoneNumero] = useState("");
-  const [paises, setPaises] = useState<PaisDdd[]>([]);
+  const { login, isAuthenticated } = useAuth();
+  const [email, setEmail] = useState("admin@licitafacil.local");
   const [senha, setSenha] = useState("");
-  const [showPassword, setShowPassword] = useState(false);
-  const { getError, getTouched, handleBlur, handleChange, validateAll, clearError } = useValidation();
+  const [show, setShow] = useState(false);
+  const [erro, setErro] = useState("");
+  const [loading, setLoading] = useState(false);
 
-  const validateValor = (v: string) => validateCredencialByTipo(v, tipoCredencial, true);
+  if (isAuthenticated) return <Navigate to="/usuarios" replace />;
 
-  useEffect(() => {
-    fetch("/pais-ddd.json")
-      .then((res) => res.json())
-      .then((data: PaisDdd[]) => {
-        const sorted = [...(data || [])].sort((a, b) => (a.nome || "").localeCompare(b.nome || ""));
-        setPaises(sorted);
-      })
-      .catch(() => setPaises([]));
-  }, []);
-
-  useEffect(() => {
-    if (searchParams.get("unauthorized") === "1") {
-      toast({
-        variant: "destructive",
-        title: "Não autorizado",
-        description: "Seu usuário não tem permissão para acessar esta área.",
-      });
-      setSearchParams({}, { replace: true });
-    }
-  }, [searchParams, setSearchParams, toast]);
-
-  useEffect(() => {
-    if (tipoCredencial === "CPF") setValor((v) => (v ? maskCpfInput(v) : v));
-    if (tipoCredencial === "CNPJ") setValor((v) => (v ? maskCnpjInput(v) : v));
-    if (tipoCredencial === "USERNAME") setValor((v) => (v ? maskUsernameInput(v) : v));
-    if (tipoCredencial === "EMAIL") setValor((v) => (v ? maskEmailInput(v) : v));
-  }, [tipoCredencial]);
-
-  const telefoneFormularioValido =
-    !validateCodigoPais(codigoPais.replace(/\D/g, "") || null, true) &&
-    !validateDdd(ddd, true) &&
-    !validateNumeroTelefone(telefoneNumero, true);
-
-  const handleSubmit = async (e: React.FormEvent) => {
+  async function onSubmit(e: FormEvent) {
     e.preventDefault();
-    const ok =
-      tipoCredencial === "TELEFONE"
-        ? validateAll([
-            ["codigoPais", codigoPais.replace(/\D/g, ""), (v) => validateCodigoPais(v || null, true)],
-            ["ddd", ddd, (v) => validateDdd(v, true)],
-            ["telefone", telefoneNumero, (v) => validateNumeroTelefone(v, true)],
-            ["senha", senha, (v) => validateSenha(v, true)],
-          ])
-        : validateAll([
-            ["valor", valor, validateValor],
-            ["senha", senha, (v) => validateSenha(v, true)],
-          ]);
-    if (!ok) return;
-
-    let valorEnvio: string;
-    if (tipoCredencial === "TELEFONE") {
-      valorEnvio =
-        foneSemZerosEsquerda(codigoPais.replace(/\D/g, "")) +
-        ddd.replace(/\D/g, "") +
-        telefoneNumero.replace(/\D/g, "");
-    } else if (tipoCredencial === "CPF") {
-      valorEnvio = valor.replace(/\D/g, "");
-    } else if (tipoCredencial === "CNPJ") {
-      valorEnvio = valor.replace(/[^A-Za-z0-9]/g, "").toUpperCase();
-    } else {
-      valorEnvio = valor;
-    }
-
+    setErro("");
+    setLoading(true);
     try {
-      await login({ valor: valorEnvio, tipoCredencial, senha });
-    } catch (error: unknown) {
-      const err = error as { response?: { data?: { mensagem?: string } } };
-      toast({
-        variant: "destructive",
-        title: "Erro ao entrar",
-        description: err.response?.data?.mensagem || "Credenciais inválidas. Tente novamente.",
-      });
+      await login(email.trim(), senha);
+    } catch (err: unknown) {
+      setErro(
+        (err as { response?: { data?: { mensagem?: string } }; message?: string })?.response?.data?.mensagem ||
+          (err as Error)?.message ||
+          "E-mail ou senha inválidos",
+      );
+    } finally {
+      setLoading(false);
     }
-  };
-
-  const placeholders: Record<TipoCredencial, string> = {
-    EMAIL: "seu@email.com",
-    USERNAME: "seu.usuario",
-    CPF: "000.000.000-00",
-    CNPJ: "00.000.000/0000-00",
-    TELEFONE: "(00) 00000-0000",
-  };
-
-  const credencialPreenchida =
-    tipoCredencial === "TELEFONE"
-      ? telefoneFormularioValido && codigoPais.replace(/\D/g, "").length > 0
-      : valor.trim().length > 0 && !validateValor(valor);
-
-  const submitDisabled =
-    isLoading || !credencialPreenchida || !senha || !!validateSenha(senha, true);
+  }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background px-4">
-      <div className="w-full max-w-md space-y-6">
-        <div className="flex flex-col items-center gap-2 text-center">
-          <ShieldCheck className="h-10 w-10 text-primary" />
-          <h1 className="text-2xl font-semibold tracking-tight">Admin Console</h1>
-          <p className="text-sm text-muted-foreground">Acesso exclusivo para administradores SegPonto</p>
+    <div
+      style={{
+        minHeight: "100vh",
+        display: "flex",
+        flexWrap: "wrap",
+        fontFamily: "'Montserrat', system-ui, -apple-system, 'Segoe UI', sans-serif",
+        color: "#1D1D1B",
+        background: "#FFFFFF",
+      }}
+    >
+      <section
+        style={{
+          flex: "1 1 420px",
+          boxSizing: "border-box",
+          background: "#1D1D1B",
+          padding: "48px clamp(24px, 5vw, 72px)",
+          display: "flex",
+          flexDirection: "column",
+          justifyContent: "space-between",
+          gap: 48,
+        }}
+      >
+        <Logo />
+        <div style={{ display: "flex", flexDirection: "column", gap: 16, maxWidth: 460 }}>
+          <p style={{ margin: 0, fontSize: 11, fontWeight: 700, letterSpacing: "0.14em", textTransform: "uppercase", color: "#FFCC00" }}>
+            Painel de acesso
+          </p>
+          <p style={{ margin: 0, fontSize: 40, lineHeight: 1.1, fontWeight: 800, letterSpacing: "-0.025em", color: "#FFFFFF" }}>
+            Libere o acesso. O cliente escolhe o que monitorar.
+          </p>
+          <p style={{ margin: 0, fontSize: 16, lineHeight: 1.6, color: "#DAE0E3" }}>
+            Crie, edite e desative as contas que usam o LicitaFacil.
+          </p>
         </div>
+        <div aria-hidden style={{ display: "grid", gridTemplateColumns: "repeat(8, 18px)", gap: 5 }}>
+          {DOTS.map((v, i) => (
+            <span key={i} style={{ width: 18, height: 18, background: v === 0 ? "transparent" : v === 1 ? "#374044" : "#FFCC00" }} />
+          ))}
+        </div>
+      </section>
 
-        <Card>
-          <CardHeader className="text-center">
-            <div className="mx-auto mb-2 flex h-12 w-12 items-center justify-center rounded-xl border bg-card">
-              <LogIn className="h-6 w-6" />
-            </div>
-            <CardTitle>Entrar</CardTitle>
-            <CardDescription>Use suas credenciais de administrador</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="tipoCredencial" required>
-                  Tipo de credencial
-                </Label>
-                <Select
-                  value={tipoCredencial}
-                  onValueChange={(v) => {
-                    setTipoCredencial(v as TipoCredencial);
-                    setValor("");
-                    setDdd("");
-                    setTelefoneNumero("");
-                    clearError("valor");
-                    clearError("ddd");
-                    clearError("telefone");
-                  }}
-                >
-                  <SelectTrigger id="tipoCredencial">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="EMAIL">E-mail</SelectItem>
-                    <SelectItem value="USERNAME">Usuário</SelectItem>
-                    <SelectItem value="TELEFONE">Telefone</SelectItem>
-                    <SelectItem value="CPF">CPF</SelectItem>
-                    <SelectItem value="CNPJ">CNPJ</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
+      <section
+        style={{
+          flex: "1 1 420px",
+          boxSizing: "border-box",
+          padding: "48px 24px",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <form onSubmit={onSubmit} style={{ width: "100%", maxWidth: 400, display: "flex", flexDirection: "column", gap: 20 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            <h1 style={{ margin: 0, fontSize: 28, fontWeight: 800, letterSpacing: "-0.02em" }}>Entrar no painel</h1>
+            <p style={{ margin: 0, fontSize: 14, color: "#374044" }}>Acesso restrito à equipe LicitaFacil.</p>
+          </div>
 
-              {tipoCredencial === "TELEFONE" ? (
-                <div className="grid gap-3 sm:grid-cols-3">
-                  <div className="space-y-2 sm:col-span-1">
-                    <Label required>País</Label>
-                    <Select value={codigoPais} onValueChange={setCodigoPais}>
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {paises.map((p) => (
-                          <SelectItem key={`${p.codigo}-${p.fone}`} value={foneSemZerosEsquerda(p.fone)}>
-                            {p.nome} (+{foneSemZerosEsquerda(p.fone)})
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <FieldWithExpected
-                    label="DDD"
-                    required
-                    error={getTouched("ddd") ? getError("ddd") : undefined}
-                    expected={getFieldExpected("ddd")}
-                    className="sm:col-span-1"
-                  >
-                    <Input
-                      value={ddd}
-                      onChange={(e) => {
-                        const v = maskDddInput(e.target.value);
-                        setDdd(v);
-                        handleChange("ddd", v, (x) => validateDdd(x, true));
-                      }}
-                      onBlur={() => handleBlur("ddd", ddd, (x) => validateDdd(x, true))}
-                      placeholder="11"
-                    />
-                  </FieldWithExpected>
-                  <FieldWithExpected
-                    label="Número"
-                    required
-                    error={getTouched("telefone") ? getError("telefone") : undefined}
-                    expected={getFieldExpected("telefone")}
-                    className="sm:col-span-1"
-                  >
-                    <Input
-                      value={telefoneNumero}
-                      onChange={(e) => {
-                        const v = maskNumeroTelefoneInput(e.target.value);
-                        setTelefoneNumero(v);
-                        handleChange("telefone", v, (x) => validateNumeroTelefone(x, true));
-                      }}
-                      onBlur={() => handleBlur("telefone", telefoneNumero, (x) => validateNumeroTelefone(x, true))}
-                      placeholder="99999-9999"
-                    />
-                  </FieldWithExpected>
-                </div>
-              ) : (
-                <FieldWithExpected
-                  label="Credencial"
-                  required
-                  error={getTouched("valor") ? getError("valor") : undefined}
-                  expected={getFieldExpected(tipoCredencial === "EMAIL" ? "email" : tipoCredencial.toLowerCase())}
-                >
-                  <Input
-                    value={valor}
-                    onChange={(e) => {
-                      let v = e.target.value;
-                      if (tipoCredencial === "CPF") v = maskCpfInput(v);
-                      if (tipoCredencial === "CNPJ") v = maskCnpjInput(v);
-                      if (tipoCredencial === "USERNAME") v = maskUsernameInput(v);
-                      if (tipoCredencial === "EMAIL") v = maskEmailInput(v);
-                      setValor(v);
-                      handleChange("valor", v, validateValor);
-                    }}
-                    onBlur={() => handleBlur("valor", valor, validateValor)}
-                    placeholder={placeholders[tipoCredencial]}
-                    autoComplete="username"
-                  />
-                </FieldWithExpected>
-              )}
-
-              <FieldWithExpected
-                label="Senha"
+          <label style={{ display: "flex", flexDirection: "column", gap: 8, fontSize: 14, fontWeight: 700, color: "#1D1D1B" }}>
+            E-mail
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                height: 48,
+                padding: "0 4px 0 12px",
+                border: erro ? "2px solid #9E3229" : "2px solid #A7B3B7",
+                borderRadius: 4,
+                background: "#FFFFFF",
+                boxSizing: "border-box",
+              }}
+            >
+              <input
+                type="email"
                 required
-                error={getTouched("senha") ? getError("senha") : undefined}
-                expected={getFieldExpected("senha")}
-              >
-                <div className="relative">
-                  <Input
-                    type={showPassword ? "text" : "password"}
-                    value={senha}
-                    onChange={(e) => {
-                      setSenha(e.target.value);
-                      handleChange("senha", e.target.value, (v) => validateSenha(v, true));
-                    }}
-                    onBlur={() => handleBlur("senha", senha, (v) => validateSenha(v, true))}
-                    autoComplete="current-password"
-                  />
-                  <button
-                    type="button"
-                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground"
-                    onClick={() => setShowPassword((s) => !s)}
-                    aria-label={showPassword ? "Ocultar senha" : "Mostrar senha"}
-                  >
-                    {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                  </button>
-                </div>
-              </FieldWithExpected>
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="voce@exemplo.com.br"
+                style={{ flex: 1, minWidth: 0, height: "100%", border: 0, outline: "none", background: "transparent", fontSize: 15, color: "#1D1D1B", padding: 0 }}
+              />
+            </div>
+          </label>
 
-              <Button type="submit" className="w-full" disabled={submitDisabled}>
-                {isLoading ? "Entrando…" : "Entrar"}
-              </Button>
-            </form>
-          </CardContent>
-        </Card>
-      </div>
+          <label style={{ display: "flex", flexDirection: "column", gap: 8, fontSize: 14, fontWeight: 700, color: "#1D1D1B" }}>
+            Senha
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                height: 48,
+                padding: "0 4px 0 12px",
+                border: erro ? "2px solid #9E3229" : "2px solid #A7B3B7",
+                borderRadius: 4,
+                background: "#FFFFFF",
+                boxSizing: "border-box",
+              }}
+            >
+              <input
+                type={show ? "text" : "password"}
+                required
+                value={senha}
+                onChange={(e) => setSenha(e.target.value)}
+                placeholder="Sua senha"
+                style={{ flex: 1, minWidth: 0, height: "100%", border: 0, outline: "none", background: "transparent", fontSize: 15, color: "#1D1D1B", padding: 0 }}
+              />
+              <button
+                type="button"
+                aria-label={show ? "Ocultar senha" : "Mostrar senha"}
+                onClick={() => setShow((s) => !s)}
+                style={{ width: 40, height: 40, border: 0, background: "transparent", display: "flex", alignItems: "center", justifyContent: "center", color: "#374044", cursor: "pointer" }}
+              >
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                  <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" />
+                  <circle cx="12" cy="12" r="3" />
+                </svg>
+              </button>
+            </div>
+          </label>
+
+          {erro && (
+            <p style={{ margin: 0, fontSize: 13, fontWeight: 600, color: "#9E3229" }}>{erro}</p>
+          )}
+
+          <button
+            type="submit"
+            disabled={loading}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 8,
+              minHeight: 48,
+              padding: "0 20px",
+              borderRadius: 4,
+              fontSize: 15,
+              fontWeight: 700,
+              cursor: "pointer",
+              background: "#FFCC00",
+              color: "#1D1D1B",
+              border: 0,
+              opacity: loading ? 0.6 : 1,
+            }}
+          >
+            {loading ? "Entrando..." : "Entrar"}
+          </button>
+        </form>
+      </section>
     </div>
   );
 }

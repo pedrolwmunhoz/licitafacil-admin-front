@@ -1,123 +1,124 @@
-import axios, { AxiosError, InternalAxiosRequestConfig } from "axios";
-import { toast } from "sonner";
-import {
-  API_ERRO_ID_COBRANCA_ACESSO_NEGADO,
-  empresaDeveEvitarRedirectPor403Cobranca,
-} from "@/constants/api-errors";
-import { CSRF_HEADER_VALOR, resolveApiBaseUrl } from "./api-base";
-import { navigateApp, navigateAppReplace } from "./app-navigation";
-import { obterDeviceId } from "./device-id";
-import { sessaoHint } from "./sessao-hint";
+import axios from "axios";
 
-let ultimoToastCobrancaMs = 0;
-const INTERVALO_MIN_TOAST_COBRANCA_MS = 8000;
+const USER_KEY = "lf_admin_user";
 
-function extrairErroApi(data: unknown): { id?: string; mensagem?: string } {
-  if (typeof data !== "object" || data === null) return {};
-  const o = data as Record<string, unknown>;
-  const id = o.id != null ? String(o.id) : undefined;
-  const mensagem = o.mensagem != null ? String(o.mensagem) : undefined;
-  return { id, mensagem };
+export type AuthUser = {
+  usuarioId: string;
+  nome: string;
+  email: string;
+  tipo: string;
+};
+
+export type SessaoWebResponse = {
+  usuarioId: string;
+  nome: string;
+  email: string;
+  tipo: string;
+};
+
+export type Usuario = {
+  id: string;
+  nome: string;
+  email: string;
+  tipo: string;
+  ativo: boolean;
+  createdAt: string;
+};
+
+export type PageUsuarios = {
+  paginacao: { totalPaginas: number; totalElementos: number; tamanhoPagina: number; paginaAtual: number };
+  conteudo: Usuario[];
+};
+
+/** Hint local (não é credencial). Sessão real = cookie HttpOnly. */
+export function getStoredUser(): AuthUser | null {
+  const raw = localStorage.getItem(USER_KEY);
+  if (!raw) return null;
+  try { return JSON.parse(raw) as AuthUser; } catch { return null; }
+}
+
+function saveUserHint(user: AuthUser) {
+  localStorage.setItem(USER_KEY, JSON.stringify(user));
+}
+
+export function clearSession() {
+  localStorage.removeItem(USER_KEY);
 }
 
 const api = axios.create({
-  baseURL: resolveApiBaseUrl(),
-  timeout: 30_000,
+  baseURL: import.meta.env.VITE_API_URL || "",
+  timeout: 30000,
   withCredentials: true,
   headers: {
     "Content-Type": "application/json",
-    "X-Requested-With": CSRF_HEADER_VALOR,
+    "X-Requested-With": "XMLHttpRequest",
   },
 });
 
-/** O site usa a sessão por cookie do gateway (/api/v2); o app Android segue no /api com Bearer. */
-function paraV2(url: string): string {
-  return url.startsWith("/api/") && !url.startsWith("/api/v2/") ? `/api/v2/${url.slice("/api/".length)}` : url;
-}
-
-/** Caminho no formato /api/... (sem query e sem o /v2), para comparar rotas. */
-function caminhoApi(config: InternalAxiosRequestConfig): string {
-  const caminho = (config.url ?? "").replace(config.baseURL ?? "", "").split("?")[0] ?? "";
-  return caminho.replace(/^\/api\/v2\//, "/api/");
-}
-
-/**
- * Rotas em que 401/403 é resposta de negócio (credencial errada, link expirado, sem sessão ainda)
- * e não sessão encerrada: não redirecionam para o login.
- */
-function isRespostaSemRedirect(config: InternalAxiosRequestConfig): boolean {
-  const metodo = (config.method ?? "").toLowerCase();
-  const caminho = caminhoApi(config);
-  if (metodo === "get") {
-    return caminho === "/api/admin-console/auth/me";
-  }
-  if (metodo !== "post") return false;
-  return (
-    caminho === "/api/admin-console/auth" ||
-    caminho === "/api/admin-console/auth/logout"
-  );
-}
-
-api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
-  if (config.url) config.url = paraV2(config.url);
-  config.headers.set("X-Device-Id", obterDeviceId());
-  return config;
-});
-
 api.interceptors.response.use(
-  (response) => response,
-  async (error: AxiosError) => {
-    const originalRequest = error.config as InternalAxiosRequestConfig | undefined;
-    if (!originalRequest) return Promise.reject(error);
-
-    // O gateway já renova o JWT sozinho; 401 aqui é sessão encerrada (expirada, revogada ou logout).
-    if (error.response?.status === 401) {
-      if (isRespostaSemRedirect(originalRequest)) {
-        return Promise.reject(error);
-      }
-      sessaoHint.limpar();
-      navigateApp("/login");
-      return Promise.reject(error);
+  (r) => r,
+  (err) => {
+    const url = String(err.config?.url || "");
+    if (err.response?.status === 401 && !url.includes("/auth")) {
+      clearSession();
+      if (!location.pathname.startsWith("/login")) location.href = "/login";
     }
-
-    // 403 Forbidden — cobrança / limite (id no JSON)
-    if (error.response?.status === 403) {
-      if (isRespostaSemRedirect(originalRequest)) {
-        return Promise.reject(error);
-      }
-      const { id, mensagem } = extrairErroApi(error.response?.data);
-      const mensagemInadimplencia = mensagem?.includes("inadimplência") ?? false;
-
-      if (id === API_ERRO_ID_COBRANCA_ACESSO_NEGADO || mensagemInadimplencia) {
-        const userType = sessaoHint.tipo();
-        if (userType === "EMPRESA") {
-          if (empresaDeveEvitarRedirectPor403Cobranca()) {
-            return Promise.reject(error);
-          }
-          navigateAppReplace("/empresa/pagamento-pendente");
-          return Promise.reject(error);
-        }
-        if (userType === "FUNCIONARIO") {
-          window.dispatchEvent(new CustomEvent("segponto:cobranca-bloqueio"));
-          const agora = Date.now();
-          if (agora - ultimoToastCobrancaMs >= INTERVALO_MIN_TOAST_COBRANCA_MS) {
-            ultimoToastCobrancaMs = agora;
-            toast.error(
-              mensagem ||
-                "O acesso está suspenso até a empresa regularizar a cobrança do plano.",
-              { duration: 9000 }
-            );
-          }
-          return Promise.reject(error);
-        }
-      }
-
-      navigateApp("/login?unauthorized=1");
-      return Promise.reject(error);
-    }
-
-    return Promise.reject(error);
-  }
+    return Promise.reject(err);
+  },
 );
+
+export async function loginAdmin(email: string, senha: string) {
+  const { data } = await api.post<SessaoWebResponse>("/api/admin-console/auth", { email, senha });
+  if (data.tipo !== "ADMIN") throw new Error("Acesso só para admin");
+  saveUserHint({
+    usuarioId: data.usuarioId,
+    nome: data.nome,
+    email: data.email,
+    tipo: data.tipo,
+  });
+  return data;
+}
+
+export async function meAdmin() {
+  const { data } = await api.get<SessaoWebResponse>("/api/admin-console/auth/me");
+  if (data.tipo !== "ADMIN") throw new Error("Sem sessão admin");
+  saveUserHint({
+    usuarioId: data.usuarioId,
+    nome: data.nome,
+    email: data.email,
+    tipo: data.tipo,
+  });
+  return data;
+}
+
+export async function logoutAdmin() {
+  try {
+    await api.post("/api/admin-console/auth/logout");
+  } finally {
+    clearSession();
+  }
+}
+
+export async function listarUsuarios(page = 0, size = 10) {
+  const { data } = await api.get<PageUsuarios>("/api/admin/usuarios", { params: { page, size } });
+  return data;
+}
+
+export async function criarUsuario(body: { nome: string; email: string; senha: string; tipo: "ADMIN" | "USER" }) {
+  const { data } = await api.post<string>("/api/admin/usuarios", body);
+  return data;
+}
+
+export async function atualizarUsuario(id: string, body: { nome: string; email: string; tipo: "ADMIN" | "USER"; ativo: boolean }) {
+  await api.put(`/api/admin/usuarios/${id}`, body);
+}
+
+export async function deletarUsuario(id: string) {
+  await api.delete(`/api/admin/usuario/${id}`);
+}
+
+export async function resetarSenha(id: string, senhaNova: string) {
+  await api.post(`/api/admin/usuario/${id}/resetar-senha`, { senhaNova });
+}
 
 export default api;

@@ -1,12 +1,11 @@
-# licitafacil-admin-front
+# Painel Admin — LicitaFacil
 
-Painel admin do LicitaFacil (estrutura copiada do `ponto-eletronico-admin-front`).
-
-Mockup de referência: `mockups/Radar PNCP — Mockups MVP (1).html`
-
-API: `licitafacil-api` → login em `POST /api/admin-console/auth`
+Login admin + CRUD de usuários contra `licitafacil-api`.
 
 ```bash
 npm install
-npm run dev
+npm run dev   # http://localhost:5174  (proxy /api → :8082)
+npm run build
 ```
+
+Endpoints: `/api/admin-console/auth`, `/api/admin/usuarios`, reset/delete.
